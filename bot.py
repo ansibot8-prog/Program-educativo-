@@ -354,19 +354,35 @@ class NetflixChecker:
                 except: pass
         return results
 
-        def __init__(self, token, proxy_file="proxies.txt"):
+            def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
         
-        # --- AQUÍ EMPIEZA EL CAMBIO ---
-        # Creamos la aplicación sin construirla inmediatamente para poder configurar timeouts
+        # Crear aplicación con timeouts configurados
         builder = Application.builder().token(token)
         self.app = builder.build()
         
-        # Configuramos los tiempos de espera para evitar el error TimedOut
+        # Evitar TimedOut en peticiones a Telegram y Netflix
         self.app.bot.request.connect_timeout = 10
         self.app.bot.request.read_timeout = 20
         self.app.bot.request.write_timeout = 10
-        # --- FIN DEL CAMBIO ---
+
+        # Cargar proxies si existe el archivo
+        proxy_list = []
+        if os.path.exists(proxy_file):
+            with open(proxy_file, 'r') as f:
+                proxy_list = [line.strip() for line in f if line.strip()]
+        
+        self.checker = NetflixChecker(threads=5, proxy_list=proxy_list, timeout=20)
+        self.user_sessions = {}
+        self.tv_codes_pending = {}
+
+        # Handlers
+        self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("help", self.help_command))
+        self.app.add_handler(CommandHandler("stats", self.stats_command))
+        self.app.add_handler(CommandHandler("logs", self.logs_command))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
 
         # Cargar proxies si existe el archivo
         proxy_list = []
