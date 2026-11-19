@@ -330,7 +330,7 @@ class NetflixChecker:
         results = []
         with ThreadPoolExecutor(max_workers=self.threads) as executor:
             futures = [executor.submit(self.process_cookie, c) for c in cookies_list if c.strip()]
-                    def _next_proxy(self):
+    def _next_proxy(self):
         if not self._proxy_list: return None
         with self.lock:
             p = self._proxy_list[self._proxy_index % len(self._proxy_list)]
