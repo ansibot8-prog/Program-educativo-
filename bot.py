@@ -635,7 +635,7 @@ class NetflixCheckerBot:
 
     def run(self):
         logger.info(f"Bot iniciado - Dev: {DEVELOPER} - STEALTH MODE")
-        self.app.add_handler(MessageHandler(filters.CANCEL, self.cancel_command))
+        #self.app.add_handler(MessageHandler(filters.CANCEL, self.cancel_command))
         self.app.add_handler(CommandHandler("cancel", self.cancel_command))
         self.app.add_handler(MessageHandler(filters.Regex('^/done$'), self.done_command)) # Opcional si quieres mantener /done oculto pero funcional
         self.app.add_handler(CallbackQueryHandler(self.button_handler))
