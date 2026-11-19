@@ -355,9 +355,17 @@ class NetflixChecker:
         return results
 
         
-        class NetflixCheckerBot:
-            def __init__(self, token, proxy_file="proxies.txt"):
+# ... código anterior ...
+
+
+class NetflixCheckerBot:
+    # ^^^ Línea 358 - Clase definida
+
+    def __init__(self, token, proxy_file="proxies.txt"):
+        # ^^^ Línea 359 - Definición del método (4 espacios)
+        
         self.token = token
+        # ^^^ Línea 360 - Cuerpo del método (8 espacios).token = token
         
         # Crear aplicación con timeouts configurados para evitar TimedOut
         builder = Application.builder().token(token)
