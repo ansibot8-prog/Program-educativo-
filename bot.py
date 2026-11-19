@@ -355,27 +355,21 @@ class NetflixChecker:
         return results
 
         
+
+class NetflixCheckerBot:
     def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
         
-        # Configurar los tiempos de espera AQUÍ, al construir la app
+        # Configurar timeouts correctamente para evitar AttributeError
         builder = Application.builder().token(token)
-        
-        # Esta es la forma correcta de setear timeouts en python-telegram-bot 20+
         builder.request_kwargs({
             "connect_timeout": 10,
             "read_timeout": 20,
             "write_timeout": 10
         })
-        
         self.app = builder.build()
-        
-        # Configurar tiempos de espera
-        self.app.bot.request.connect_timeout = 10
-        self.app.bot.request.read_timeout = 20
-        self.app.bot.request.write_timeout = 10
 
-        # Cargar proxies si existe el archivo
+        # Cargar proxies
         proxy_list = []
         if os.path.exists(proxy_file):
             with open(proxy_file, 'r') as f:
@@ -643,4 +637,4 @@ class NetflixChecker:
 if __name__ == "__main__":
     bot = NetflixCheckerBot("9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
     bot.run()
-            
+ 
