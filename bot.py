@@ -357,17 +357,17 @@ class NetflixChecker:
         
 
 class NetflixCheckerBot:
-    def __init__(self, token, proxy_file="proxies.txt"):
+        def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
         
-        # Configurar timeouts correctamente para evitar AttributeError
-        builder = Application.builder().token(token)
-        builder.request_kwargs({
-            "connect_timeout": 10,
-            "read_timeout": 20,
-            "write_timeout": 10
-        })
-        self.app = builder.build()
+        # Construir la app pasando los kwargs directamente en .build()
+        self.app = Application.builder().token(token).build(
+            request_kwargs={
+                "connect_timeout": 10,
+                "read_timeout": 20,
+                "write_timeout": 10
+            }
+        )
 
         # Cargar proxies
         proxy_list = []
