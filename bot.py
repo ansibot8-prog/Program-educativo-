@@ -330,12 +330,23 @@ class NetflixChecker:
         results = []
         with ThreadPoolExecutor(max_workers=self.threads) as executor:
             futures = [executor.submit(self.process_cookie, c) for c in cookies_list if c.strip()]
-                def process_batch(self, cookies_list):
+                    def _next_proxy(self):
+        if not self._proxy_list: return None
+        with self.lock:
+            p = self._proxy_list[self._proxy_index % len(self._proxy_list)]
+            self._proxy_index += 1
+        if p and not p.startswith(("http://","https://","socks4://","socks5://")): p = "http://"+p
+        return p
+
+    def process_cookie(self, cookie_text):
+        # ... (cuerpo de process_cookie) ...
+        pass 
+
+    def process_batch(self, cookies_list):
         self.stats["total"], self.stats["start"] = len(cookies_list), time.time()
         results = []
         with ThreadPoolExecutor(max_workers=self.threads) as executor:
             futures = [executor.submit(self.process_cookie, c) for c in cookies_list if c.strip()]
-            # CORRECCIÓN AQUÍ: Faltaba la palabra "in"
             for future in as_completed(futures):
                 try:
                     result = future.result()
