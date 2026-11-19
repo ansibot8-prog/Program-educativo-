@@ -13,7 +13,9 @@ import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+
+IA Sin Censura — https://iasincensura.ai/
 from logging.handlers import RotatingFileHandler
 
 # --- CONFIGURACIÓN GLOBAL ---
