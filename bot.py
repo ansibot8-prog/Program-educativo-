@@ -330,7 +330,13 @@ class NetflixChecker:
         results = []
         with ThreadPoolExecutor(max_workers=self.threads) as executor:
             futures = [executor.submit(self.process_cookie, c) for c in cookies_list if c.strip()]
-            for future as_completed(futures):
+                def process_batch(self, cookies_list):
+        self.stats["total"], self.stats["start"] = len(cookies_list), time.time()
+        results = []
+        with ThreadPoolExecutor(max_workers=self.threads) as executor:
+            futures = [executor.submit(self.process_cookie, c) for c in cookies_list if c.strip()]
+            # CORRECCIÓN AQUÍ: Faltaba la palabra "in"
+            for future in as_completed(futures):
                 try:
                     result = future.result()
                     if result: results.append(result)
