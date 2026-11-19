@@ -354,7 +354,7 @@ class NetflixChecker:
                 except: pass
         return results
 
-            def __init__(self, token, proxy_file="proxies.txt"):
+    def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
         
         # Crear aplicación con timeouts configurados
