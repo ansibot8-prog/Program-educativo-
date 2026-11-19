@@ -354,6 +354,7 @@ class NetflixChecker:
                 except: pass
         return results
 
+        
         class NetflixCheckerBot:
     def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
