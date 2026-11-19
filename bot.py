@@ -668,4 +668,4 @@ class NetflixChecker:
 if __name__ == "__main__":
     print("Llegué hasta aquí")
 bot = NetflixCheckerBot("9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
-    bot.run()
+bot.run()
