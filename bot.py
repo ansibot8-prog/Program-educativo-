@@ -355,20 +355,19 @@ class NetflixChecker:
         return results
 
         
-# ... código anterior ...
-
-
-class NetflixCheckerBot:
-    # ^^^ Línea 358 - Clase definida
-
     def __init__(self, token, proxy_file="proxies.txt"):
-        # ^^^ Línea 359 - Definición del método (4 espacios)
-        
         self.token = token
-        # ^^^ Línea 360 - Cuerpo del método (8 espacios).token = token
         
-        # Crear aplicación con timeouts configurados para evitar TimedOut
+        # Configurar los tiempos de espera AQUÍ, al construir la app
         builder = Application.builder().token(token)
+        
+        # Esta es la forma correcta de setear timeouts en python-telegram-bot 20+
+        builder.request_kwargs({
+            "connect_timeout": 10,
+            "read_timeout": 20,
+            "write_timeout": 10
+        })
+        
         self.app = builder.build()
         
         # Configurar tiempos de espera
