@@ -666,5 +666,6 @@ class NetflixChecker:
             await update.message.reply_text("ℹ️ Cola vacía.")
 
 if __name__ == "__main__":
-    bot = NetflixCheckerBot("9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
+    print("Llegué hasta aquí")
+bot = NetflixCheckerBot("9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
     bot.run()
