@@ -356,7 +356,7 @@ class NetflixChecker:
 
         
         class NetflixCheckerBot:
-    def __init__(self, token, proxy_file="proxies.txt"):
+            def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
         
         # Crear aplicación con timeouts configurados para evitar TimedOut
