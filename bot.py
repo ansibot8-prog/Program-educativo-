@@ -357,8 +357,11 @@ class NetflixChecker:
         
 
 class NetflixCheckerBot:
-        def __init__(self, token, proxy_file="proxies.txt"):
+            def __init__(self, token, proxy_file="proxies.txt"):
+        # ^^^ Línea 360 - Definición (4 espacios)
+        
         self.token = token
+        # ^^^ Línea 361 - Cuerpo (8 espacios)
         
         # Construir la app pasando los kwargs directamente en .build()
         self.app = Application.builder().token(token).build(
