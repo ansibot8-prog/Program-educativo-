@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN PRINCIPAL
 # ==========================================
 # Usar variable de entorno si existe, sino el valor hardcodeado (por si pruebas local)
-TOKEN = os.environ.get('BOT_TOKEN', "9212668286:AAGTuejSRwVAODsY4pRU_gmHVLXb3hL6cqU") 
-ADMIN_ID = int(os.environ.get('ADMIN_ID', 8917082484))   
+TOKEN = os.environ.get('BOT_TOKEN', "9212668286:AAGTuejSRwVAODsY4pRU_gmHVLXb3hL6cqU")
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 8917082484))
 
 # Palabras clave para filtrar spam
 SPAM_KEYWORDS = ["luckybear", "casino", "bond", "promo", "gift", "bonus"]
@@ -434,7 +434,7 @@ def main():
     stats_handler = CommandHandler('stats', stats_command)
     logs_handler = CommandHandler('logs', logs_command)
     done_handler = CommandHandler('done', done_command)
-    
+
     # Handler para cancelar cola
     cancel_handler = CommandHandler('cancel', lambda update, context: update.message.reply_text("Cola vaciada.") or setattr(user_sessions.get(update.effective_user.id, {}), 'cookies', []) if update.effective_user.id in user_sessions else None)
 
@@ -449,15 +449,10 @@ def main():
     app.add_handler(message_handler)
 
     logger.info("Bot starting...")
-    
-    # USAR WEBHOOK EN LUGAR DE POLLING
-    # Esto hace que el bot escuche en el puerto que Render le dio
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN, # El path es el token del bot
-        webhook_url=f"https://TU-DOMINIO-AQUI.vercel.app/{TOKEN}" # Reemplaza con tu dominio real
-    )
+
+    # USAR POLLING EN LUGAR DE WEBHOOK
+    # Esto asegura que el bot responda inmediatamente sin problemas de URL o certificados
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
