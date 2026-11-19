@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN PRINCIPAL
 # ==========================================
 # Usar variable de entorno si existe, sino el valor hardcodeado (por si pruebas local)
-TOKEN = os.environ.get('BOT_TOKEN', "9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw") 
+TOKEN = os.environ.get('BOT_TOKEN', "9212668286:AAGTuejSRwVAODsY4pRU_gmHVLXb3hL6cqU") 
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 8917082484))   
 
 # Palabras clave para filtrar spam
