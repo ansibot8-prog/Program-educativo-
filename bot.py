@@ -354,39 +354,27 @@ class NetflixChecker:
                 except: pass
         return results
 
-    def _save_hit(self, acc, raw_cookie):
-        safe_email = re.sub(r'[\\/:*?"<>|]', "_", acc["email"])
-        fname = f"[{acc['country_code']}] [{safe_email}] - {acc['plan']}.txt"
-        path = os.path.join("hits", fname)
-        profs = ", ".join(acc["profiles"]) if acc["profiles"] else "N/A"
-        nf_id = acc.get("netflix_id_raw","")
-        cookie_val = f"NetflixId={nf_id}" if nf_id else acc.get("cookie_raw","")
-
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(f"Email: {acc['email']}\nName: {acc['name']}\nCountry: {acc['country']} ({acc['country_code']})\nPlan: {acc['plan']}\nPrice: {acc['price']}\nMember Since: {acc['member_since']}\nNext Billing: {acc['next_billing']}\nFree Trial: {'Yes' if acc['free_trial'] else 'No'}\nVideo Quality: {acc['video_quality']}\nMax Streams: {acc['max_streams']}\nExtra Slots: {acc['extra_slots']}\nCard: {acc['card_brand']} *{acc['card_last4']}\nPayment Method: {acc['payment_method']}\nPhone: {acc['phone']} | Verified: {acc['phone_verified']}\nProfiles ({acc['profile_count']}): {profs}\n\nLogin PC: {acc['login_pc']}\nLogin Phone: {acc['login_phone']}\nLogin TV: {acc['login_tv']}\n\nCookie: {cookie_val}\n")
-
-    def get_stats(self):
-        elapsed = time.time() - self.stats["start"]
-        cpm = (self.stats["checked"]/elapsed*60) if elapsed>0 else 0
-        return {"total":self.stats["total"],"checked":self.stats["checked"],"hits":self.stats["hits"],"bad":self.stats["bad"],"errors":self.stats["errors"],"elapsed":f"{elapsed:.1f}s","cpm":f"{cpm:.1f}"}
-
-    def save_bad_cookies(self):
-        if self.bad_cookies:
-            with open("bad_cookies/bad_cookies.txt", "a", encoding="utf-8") as f:
-                for c in self.bad_cookies:
-                    f.write(c + "\n")
-            self.bad_cookies = []
-
-class NetflixCheckerBot:
-    def __init__(self, token, proxy_file="proxies.txt"):
+        def __init__(self, token, proxy_file="proxies.txt"):
         self.token = token
-        self.app = Application.builder().token(token).build()
         
+        # --- AQUÍ EMPIEZA EL CAMBIO ---
+        # Creamos la aplicación sin construirla inmediatamente para poder configurar timeouts
+        builder = Application.builder().token(token)
+        self.app = builder.build()
+        
+        # Configuramos los tiempos de espera para evitar el error TimedOut
+        self.app.bot.request.connect_timeout = 10
+        self.app.bot.request.read_timeout = 20
+        self.app.bot.request.write_timeout = 10
+        # --- FIN DEL CAMBIO ---
+
         # Cargar proxies si existe el archivo
         proxy_list = []
         if os.path.exists(proxy_file):
             with open(proxy_file, 'r') as f:
                 proxy_list = [line.strip() for line in f if line.strip()]
+        
+        # ... (el resto del código sigue igual)
         
         self.checker = NetflixChecker(threads=5, proxy_list=proxy_list, timeout=20)
         self.user_sessions = {}
